@@ -1,44 +1,143 @@
 use std::io::{BufRead, BufReader, Read};
+use std::num::{ParseFloatError, ParseIntError};
+
+const EXPECTED_VERSION: &str = "1.1";
+
+/// The error type for problems while parsing a `tsi` file.
+#[derive(Debug)]
+pub enum TsiError {
+    Io(std::io::Error),
+    ParseInt(ParseIntError),
+    ParseFloat(ParseFloatError),
+    Missing(MissingItem),
+    InvalidVersion(String),
+    IndexMismatch { found: u32, expected: u32, thing: &'static str },
+    UnexpectedKeyword(String),
+}
+
+const fn missing_item_value(s: &'static str) -> TsiError {
+    TsiError::Missing(MissingItem::Value(s))
+}
+
+const fn check_index(thing: &'static str, found: u32, expected: u32) -> Result<(), TsiError> {
+    if found == expected { Ok(()) } else { Err(TsiError::IndexMismatch { found, expected, thing }) }
+}
+
+/// Description of a missing item while parsing a `tsi` file.
+#[derive(Debug)]
+pub enum MissingItem {
+    Value(&'static str),
+    Definition(&'static str),
+    Vertex(u32),
+    Triangle(u32),
+    Inclusion(u32),
+    Exclusion(u32),
+}
+
+impl std::error::Error for TsiError {}
+
+impl std::fmt::Display for TsiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(e) => write!(f, "I/O error: {e}"),
+            Self::ParseInt(e) => write!(f, "integer parse error: {e}"),
+            Self::ParseFloat(e) => write!(f, "float parse error: {e}"),
+            Self::Missing(item) => write!(f, "missing data: {item}"),
+            Self::InvalidVersion(found) => {
+                write!(f, "unsupported version {found:?}, expected {EXPECTED_VERSION:?}")
+            }
+            Self::IndexMismatch { found, expected, thing } => {
+                write!(f, "incorrect {thing} index: found {found}, expected {expected}")
+            }
+            Self::UnexpectedKeyword(k) => write!(f, "encountered unknown keyword: {k}"),
+        }
+    }
+}
+
+impl std::fmt::Display for MissingItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MissingItem::Value(value) => write!(f, "expected value for {value}"),
+            MissingItem::Definition(value) => write!(f, "expected definition for {value}"),
+            MissingItem::Vertex(idx) => write!(f, "vertex line for index {idx}"),
+            MissingItem::Triangle(idx) => write!(f, "triangle line for index {idx}"),
+            MissingItem::Inclusion(idx) => write!(f, "inclusion line for index {idx}"),
+            MissingItem::Exclusion(idx) => write!(f, "exclusion line for index {idx}"),
+        }
+    }
+}
+
+impl From<std::io::Error> for TsiError {
+    fn from(e: std::io::Error) -> Self {
+        Self::Io(e)
+    }
+}
+
+impl From<ParseIntError> for TsiError {
+    fn from(e: ParseIntError) -> Self {
+        Self::ParseInt(e)
+    }
+}
+
+impl From<ParseFloatError> for TsiError {
+    fn from(e: ParseFloatError) -> Self {
+        Self::ParseFloat(e)
+    }
+}
+
+trait ParseValue<T> {
+    fn parse_value(self, desc: &'static str) -> Result<T, TsiError>;
+}
+
+impl<T: std::str::FromStr> ParseValue<T> for Option<&str>
+where
+    TsiError: From<<T as std::str::FromStr>::Err>,
+{
+    /// Shorthand notation for expecting some value and parsing it as a `T`.
+    fn parse_value(self, desc: &'static str) -> Result<T, TsiError> {
+        Ok(self.ok_or(missing_item_value(desc))?.parse()?)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Tsi {
     /// Box dimensions in nm.
-    dimensions: [f32; 3],
-    vertices: Vec<Vertex>,
-    triangles: Vec<Triangle>,
-    inclusions: Vec<Inclusion>,
-    exclusions: Vec<Exclusion>,
+    pub dimensions: [f32; 3],
+    pub vertices: Vec<Vertex>,
+    pub triangles: Vec<Triangle>,
+    pub inclusions: Vec<Inclusion>,
+    pub exclusions: Vec<Exclusion>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Vertex {
-    position: [f32; 3],
-    domain: i32,
+    pub position: [f32; 3],
+    pub domain: i32,
 }
 
 // In the TS2CG implementation, this is an `int`.
-type VertexIndex = u32;
+pub type VertexIndex = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd, Hash)]
 pub struct Triangle {
-    vertices: [VertexIndex; 3],
+    pub vertices: [VertexIndex; 3],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Inclusion {
-    ty: i32,
-    vertex_index: VertexIndex,
-    vector: [f32; 2],
+    pub ty: i32,
+    pub vertex_index: VertexIndex,
+    pub vector: [f32; 2],
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
 pub struct Exclusion {
-    vertex_index: VertexIndex,
-    radius: f32,
+    pub vertex_index: VertexIndex,
+    pub radius: f32,
 }
 
 impl Tsi {
-    pub fn parse(reader: impl Read) -> std::io::Result<Self> {
+    pub fn parse(reader: impl Read) -> Result<Self, TsiError> {
         let reader = BufReader::new(reader);
         let mut lines = reader.lines();
 
@@ -48,233 +147,112 @@ impl Tsi {
         let mut triangles = Vec::new();
         let mut inclusions = Vec::new();
         let mut exclusions = Vec::new();
-        loop {
-            let Some(line) = lines.next().transpose()? else { break };
+
+        while let Some(line_result) = lines.next() {
+            let line = line_result?;
             let mut words = line.split_whitespace();
-            let keyword = words.next().expect("expected keyword");
+            let keyword = match words.next() {
+                Some(k) => k,
+                None => return Err(missing_item_value("section keyword")),
+            };
 
             match keyword {
-                "version" => version = Some(words.next().expect("tsi version tag").to_string()),
+                "version" => {
+                    version =
+                        Some(words.next().ok_or(missing_item_value("version tag"))?.to_string());
+                }
                 "box" => {
-                    let x = words
-                        .next()
-                        .expect("box dimensions x value")
-                        .parse()
-                        .expect("could not parse box dimensions x value");
-                    let y = words
-                        .next()
-                        .expect("box dimensions y value")
-                        .parse()
-                        .expect("could not parse box dimensions y value");
-                    let z = words
-                        .next()
-                        .expect("box dimensions z value")
-                        .parse()
-                        .expect("could not parse box dimensions z value");
+                    let x = words.next().parse_value("box x")?;
+                    let y = words.next().parse_value("box y")?;
+                    let z = words.next().parse_value("box z")?;
                     dimensions = Some([x, y, z]);
                 }
-
-                // Find out what section is coming up.
                 "vertex" => {
-                    let n = words
-                        .next()
-                        .expect("number of vertices")
-                        .parse()
-                        .expect("could not parse number of vertices");
+                    let n: u32 = words.next().parse_value("vertex count")?;
                     vertices = Vec::with_capacity(n as usize);
                     for idx in 0..n {
-                        let line = lines.next().expect("vertex line")?;
+                        let line =
+                            lines.next().ok_or(TsiError::Missing(MissingItem::Vertex(idx)))??;
                         let mut words = line.split_whitespace();
-                        let found_idx = words
-                            .next()
-                            .expect("vertex index")
-                            .parse()
-                            .expect("could not parse vertex index");
-                        assert_eq!(
-                            idx, found_idx,
-                            "incorrectly indexed vertex: found {found_idx}, expected {idx}"
-                        );
-                        let x = words
-                            .next()
-                            .expect("vertex position x value")
-                            .parse()
-                            .expect("could not parse vertex position x value");
-                        let y = words
-                            .next()
-                            .expect("vertex position y value")
-                            .parse()
-                            .expect("could not parse vertex position y value");
-                        let z = words
-                            .next()
-                            .expect("vertex position z value")
-                            .parse()
-                            .expect("could not parse vertex position z value");
-                        let position = [x, y, z];
-                        let domain = words
-                            .next()
-                            .map(|v| v.parse().expect("could not parse vertex domain value"))
-                            .unwrap_or_default();
-                        vertices.push(Vertex { position, domain });
+
+                        let found_idx = words.next().parse_value("vertex index")?;
+                        check_index("vertex", found_idx, idx)?;
+                        let x = words.next().parse_value("vertex x")?;
+                        let y = words.next().parse_value("vertex y")?;
+                        let z = words.next().parse_value("vertex z")?;
+                        // The domain may be absent, implying it is set to 0.
+                        let domain = words.next().map(|v| v.parse()).transpose()?.unwrap_or(0);
+
+                        vertices.push(Vertex { position: [x, y, z], domain });
                     }
                 }
                 "triangle" => {
-                    let n = words
-                        .next()
-                        .expect("number of triangles")
-                        .parse()
-                        .expect("could not parse number of triangles");
-                    {
-                        triangles = Vec::with_capacity(n as usize);
-                        for idx in 0..n {
-                            let line = lines.next().expect("triangle line")?;
-                            let mut words = line.split_whitespace();
-                            let found_idx = words
-                                .next()
-                                .expect("triangle index")
-                                .parse()
-                                .expect("could not parse triangle index");
-                            assert_eq!(
-                                idx, found_idx,
-                                "incorrectly indexed triangle: found {found_idx}, expected {idx}"
-                            );
-                            let a = words
-                                .next()
-                                .expect("triangle vertex index")
-                                .parse()
-                                .expect("could not parse triangle vertex index");
-                            let b = words
-                                .next()
-                                .expect("second triangle vertex index")
-                                .parse()
-                                .expect("could not parse second triangle vertex index");
-                            let c = words
-                                .next()
-                                .expect("third triangle vertex index")
-                                .parse()
-                                .expect("could not parse third triangle vertex index");
-                            let vertices = [a, b, c];
-                            triangles.push(Triangle { vertices });
-                        }
+                    let n: u32 = words.next().parse_value("triangle count")?;
+                    triangles = Vec::with_capacity(n as usize);
+                    for idx in 0..n {
+                        let line =
+                            lines.next().ok_or(TsiError::Missing(MissingItem::Triangle(idx)))??;
+                        let mut words = line.split_whitespace();
+
+                        let found_idx = words.next().parse_value("triangle index")?;
+                        check_index("triangle", found_idx, idx)?;
+                        let a = words.next().parse_value("triangle vertex index one")?;
+                        let b = words.next().parse_value("triangle vertex index two")?;
+                        let c = words.next().parse_value("triangle vertex index three")?;
+
+                        triangles.push(Triangle { vertices: [a, b, c] });
                     }
                 }
                 "inclusion" => {
-                    let n = words
-                        .next()
-                        .expect("number of inclusions")
-                        .parse()
-                        .expect("could not parse number of inclusions");
+                    let n: u32 = words.next().parse_value("inclusion count")?;
                     inclusions = Vec::with_capacity(n as usize);
                     for idx in 0..n {
-                        let line = lines.next().expect("inclusion line")?;
+                        let line = lines
+                            .next()
+                            .ok_or(TsiError::Missing(MissingItem::Inclusion(idx)))??;
                         let mut words = line.split_whitespace();
-                        let found_idx = words
-                            .next()
-                            .expect("inclusion index")
-                            .parse()
-                            .expect("could not parse inclusion index");
-                        assert_eq!(
-                            idx, found_idx,
-                            "incorrectly indexed inclusion: found {found_idx}, expected {idx}"
-                        );
-                        let ty = words
-                            .next()
-                            .expect("inclusion type index")
-                            .parse()
-                            .expect("could not parse inclusion type index");
-                        let vertex_index = words
-                            .next()
-                            .expect("inclusino vertex index")
-                            .parse()
-                            .expect("could not parse inclusino vertex index");
-                        let x = words
-                            .next()
-                            .expect("inclusion vector x value")
-                            .parse::<f32>()
-                            .expect("could not parse inclusion vector x value");
-                        let y = words
-                            .next()
-                            .expect("inclusion vector x value")
-                            .parse::<f32>()
-                            .expect("could not parse inclusion vector y value");
+
+                        let found_idx = words.next().parse_value("inclusion index")?;
+                        check_index("inclusion", found_idx, idx)?;
+                        let ty = words.next().parse_value("inclusion type")?;
+                        let vertex_index = words.next().parse_value("inclusion vertex index")?;
+                        let x: f32 = words.next().parse_value("inclusion vector x")?;
+                        let y: f32 = words.next().parse_value("inclusion vector y")?;
                         let norm = f32::sqrt(x.powi(2) + y.powi(2));
-                        let vector = [x / norm, y / norm];
+                        let vector = if norm > 0.0 { [x / norm, y / norm] } else { [0.0, 0.0] };
+
                         inclusions.push(Inclusion { ty, vertex_index, vector });
                     }
                 }
                 "exclusion" => {
-                    let n = words
-                        .next()
-                        .expect("number of exclusions")
-                        .parse()
-                        .expect("could not parse number of exclusions");
+                    let n: u32 = words.next().parse_value("exclusion count")?;
                     exclusions = Vec::with_capacity(n as usize);
                     for idx in 0..n {
-                        let line = lines.next().expect("exclusion line")?;
+                        let line = lines
+                            .next()
+                            .ok_or(TsiError::Missing(MissingItem::Exclusion(idx)))??;
                         let mut words = line.split_whitespace();
-                        let found_idx = words
-                            .next()
-                            .expect("exclusion vertex index")
-                            .parse()
-                            .expect("could not parse inclusion exclusion index");
-                        assert_eq!(
-                            idx, found_idx,
-                            "incorrectly indexed exclusion: found {found_idx}, expected {idx}"
-                        );
-                        let vertex_index = words
-                            .next()
-                            .expect("vertex index")
-                            .parse()
-                            .expect("could not parse exclusion vertex index");
-                        let radius = words
-                            .next()
-                            .expect("exclusion exclusion radius")
-                            .parse()
-                            .expect("could not parse exclusion radius");
+
+                        let found_idx = words.next().parse_value("exclusion index")?;
+                        check_index("exclusion", found_idx, idx)?;
+                        let vertex_index = words.next().parse_value("exclusion vertex index")?;
+                        let radius = words.next().parse_value("exclusion radius")?;
+
                         exclusions.push(Exclusion { vertex_index, radius });
                     }
                 }
-                unknown => panic!("encountered unknown keyword: {unknown}"),
+                unknown => return Err(TsiError::UnexpectedKeyword(unknown.to_string())),
             }
         }
 
-        const VERSION: &str = "1.1";
         match version {
-            Some(version) if version == VERSION => {}
-            Some(version) => {
-                panic!("found unsupported version {version}, expected version {VERSION}")
-            }
-            None => panic!("version must be specified, expected version {VERSION}"),
+            Some(version) if version == EXPECTED_VERSION => {}
+            Some(found) => return Err(TsiError::InvalidVersion(found)),
+            None => return Err(TsiError::Missing(MissingItem::Definition("version"))),
         }
-        Ok(Tsi {
-            dimensions: dimensions.expect("box dimensions must be specified"),
-            vertices,
-            triangles,
-            inclusions,
-            exclusions,
-        })
-    }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+        let dimensions = dimensions.ok_or(TsiError::Missing(MissingItem::Definition("box")))?;
 
-    #[test]
-    fn basic() {
-        let src = "version 1.1
-box 50.000     50.000     50.000
-vertex 3
-0       21.4    33.8    32.7    0
-1       38.1    26.1    32.3    0
-2       40.9    24.2    19.9    0
-triangle 1
-0          1       2       0    1
-inclusion 3
-0         1       22       0    1
-1         1        5       0    1
-2         2       30       0    1";
-        let tsi = Tsi::parse(src.as_bytes()).unwrap();
-        dbg!(tsi);
-        panic!();
+        Ok(Tsi { dimensions, vertices, triangles, inclusions, exclusions })
     }
 }
