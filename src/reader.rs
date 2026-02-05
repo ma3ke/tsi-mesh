@@ -4,7 +4,7 @@ use std::num::{ParseFloatError, ParseIntError};
 
 use crate::Tsi;
 
-pub const EXPECTED_VERSION: &str = "1.1";
+pub const EXPECTED_VERSIONS: [&str; 2] = ["1.1", "1.2"];
 
 /// The error type for problems while parsing a `tsi` file.
 #[derive(Debug)]
@@ -43,7 +43,8 @@ impl std::fmt::Display for TsiError {
             Self::ParseFloat(e) => write!(f, "float parse error: {e}"),
             Self::Missing(item) => write!(f, "missing data: {item}"),
             Self::InvalidVersion(found) => {
-                write!(f, "unsupported version {found:?}, expected {EXPECTED_VERSION:?}")
+                let expected_versions = EXPECTED_VERSIONS.join(", ");
+                write!(f, "unsupported version {found:?}, expected {expected_versions:?}")
             }
             Self::IndexMismatch { found, expected, thing } => {
                 write!(f, "incorrect {thing} index: found {found}, expected {expected}")
@@ -247,7 +248,7 @@ impl ReadTsi for Tsi {
         }
 
         match version {
-            Some(version) if version == EXPECTED_VERSION => {}
+            Some(version) if EXPECTED_VERSIONS.contains(&version.as_str()) => {}
             Some(found) => return Err(TsiError::InvalidVersion(found)),
             None => return Err(TsiError::Missing(MissingItem::Definition("version"))),
         }
