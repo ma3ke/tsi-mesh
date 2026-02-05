@@ -19,10 +19,6 @@ const fn missing_item_value(s: &'static str) -> TsiError {
     TsiError::Missing(MissingItem::Value(s))
 }
 
-const fn check_index(thing: &'static str, found: u32, expected: u32) -> Result<(), TsiError> {
-    if found == expected { Ok(()) } else { Err(TsiError::IndexMismatch { found, expected, thing }) }
-}
-
 /// Description of a missing item while parsing a `tsi` file.
 #[derive(Debug)]
 pub enum MissingItem {
@@ -136,6 +132,70 @@ pub struct Exclusion {
     pub radius: f32,
 }
 
+mod items {
+    use crate::{Exclusion, Inclusion, ParseValue, Triangle, TsiError, Vertex};
+
+    const fn check_index(thing: &'static str, found: u32, expected: u32) -> Result<(), TsiError> {
+        if found == expected {
+            Ok(())
+        } else {
+            Err(TsiError::IndexMismatch { found, expected, thing })
+        }
+    }
+
+    pub fn parse_vertex_line(line: &str, expected_idx: u32) -> Result<Vertex, TsiError> {
+        let mut words = line.split_whitespace();
+        let found_idx = words.next().parse_value("vertex index")?;
+        check_index("vertex", found_idx, expected_idx)?;
+
+        let x = words.next().parse_value("vertex x")?;
+        let y = words.next().parse_value("vertex y")?;
+        let z = words.next().parse_value("vertex z")?;
+        // The domain may be absent, implying it is set to 0.
+        let domain = words.next().map(|v| v.parse()).transpose()?.unwrap_or(0);
+
+        Ok(Vertex { position: [x, y, z], domain })
+    }
+
+    pub fn parse_triangle_line(line: &str, expected_idx: u32) -> Result<Triangle, TsiError> {
+        let mut words = line.split_whitespace();
+        let found_idx = words.next().parse_value("triangle index")?;
+        check_index("triangle", found_idx, expected_idx)?;
+
+        let a = words.next().parse_value("first triangle vertex index")?;
+        let b = words.next().parse_value("second triangle vertex index")?;
+        let c = words.next().parse_value("third triangle vertex index")?;
+
+        Ok(Triangle { vertices: [a, b, c] })
+    }
+
+    pub fn parse_inclusion_line(line: &str, expected_idx: u32) -> Result<Inclusion, TsiError> {
+        let mut words = line.split_whitespace();
+        let found_idx = words.next().parse_value("inclusion index")?;
+        check_index("inclusion", found_idx, expected_idx)?;
+
+        let ty = words.next().parse_value("inclusion type")?;
+        let vertex_index = words.next().parse_value("inclusion vertex index")?;
+        let x: f32 = words.next().parse_value("inclusion vector x")?;
+        let y: f32 = words.next().parse_value("inclusion vector y")?;
+        let norm = f32::sqrt(x.powi(2) + y.powi(2));
+        let vector = if norm > 0.0 { [x / norm, y / norm] } else { [0.0, 0.0] };
+
+        Ok(Inclusion { ty, vertex_index, vector })
+    }
+
+    pub fn parse_exclusion_line(line: &str, expected_idx: u32) -> Result<Exclusion, TsiError> {
+        let mut words = line.split_whitespace();
+        let found_idx = words.next().parse_value("exclusion index")?;
+        check_index("exclusion", found_idx, expected_idx)?;
+
+        let vertex_index = words.next().parse_value("exclusion vertex index")?;
+        let radius = words.next().parse_value("exclusion radius")?;
+
+        Ok(Exclusion { vertex_index, radius })
+    }
+}
+
 impl Tsi {
     pub fn parse(reader: impl Read) -> Result<Self, TsiError> {
         let reader = BufReader::new(reader);
@@ -173,17 +233,8 @@ impl Tsi {
                     for idx in 0..n {
                         let line =
                             lines.next().ok_or(TsiError::Missing(MissingItem::Vertex(idx)))??;
-                        let mut words = line.split_whitespace();
-
-                        let found_idx = words.next().parse_value("vertex index")?;
-                        check_index("vertex", found_idx, idx)?;
-                        let x = words.next().parse_value("vertex x")?;
-                        let y = words.next().parse_value("vertex y")?;
-                        let z = words.next().parse_value("vertex z")?;
-                        // The domain may be absent, implying it is set to 0.
-                        let domain = words.next().map(|v| v.parse()).transpose()?.unwrap_or(0);
-
-                        vertices.push(Vertex { position: [x, y, z], domain });
+                        let vertex = items::parse_vertex_line(&line, idx)?;
+                        vertices.push(vertex);
                     }
                 }
                 "triangle" => {
@@ -192,15 +243,8 @@ impl Tsi {
                     for idx in 0..n {
                         let line =
                             lines.next().ok_or(TsiError::Missing(MissingItem::Triangle(idx)))??;
-                        let mut words = line.split_whitespace();
-
-                        let found_idx = words.next().parse_value("triangle index")?;
-                        check_index("triangle", found_idx, idx)?;
-                        let a = words.next().parse_value("triangle vertex index one")?;
-                        let b = words.next().parse_value("triangle vertex index two")?;
-                        let c = words.next().parse_value("triangle vertex index three")?;
-
-                        triangles.push(Triangle { vertices: [a, b, c] });
+                        let triangle = items::parse_triangle_line(&line, idx)?;
+                        triangles.push(triangle);
                     }
                 }
                 "inclusion" => {
@@ -210,18 +254,8 @@ impl Tsi {
                         let line = lines
                             .next()
                             .ok_or(TsiError::Missing(MissingItem::Inclusion(idx)))??;
-                        let mut words = line.split_whitespace();
-
-                        let found_idx = words.next().parse_value("inclusion index")?;
-                        check_index("inclusion", found_idx, idx)?;
-                        let ty = words.next().parse_value("inclusion type")?;
-                        let vertex_index = words.next().parse_value("inclusion vertex index")?;
-                        let x: f32 = words.next().parse_value("inclusion vector x")?;
-                        let y: f32 = words.next().parse_value("inclusion vector y")?;
-                        let norm = f32::sqrt(x.powi(2) + y.powi(2));
-                        let vector = if norm > 0.0 { [x / norm, y / norm] } else { [0.0, 0.0] };
-
-                        inclusions.push(Inclusion { ty, vertex_index, vector });
+                        let inclusion = items::parse_inclusion_line(&line, idx)?;
+                        inclusions.push(inclusion);
                     }
                 }
                 "exclusion" => {
@@ -231,14 +265,8 @@ impl Tsi {
                         let line = lines
                             .next()
                             .ok_or(TsiError::Missing(MissingItem::Exclusion(idx)))??;
-                        let mut words = line.split_whitespace();
-
-                        let found_idx = words.next().parse_value("exclusion index")?;
-                        check_index("exclusion", found_idx, idx)?;
-                        let vertex_index = words.next().parse_value("exclusion vertex index")?;
-                        let radius = words.next().parse_value("exclusion radius")?;
-
-                        exclusions.push(Exclusion { vertex_index, radius });
+                        let exclusion = items::parse_exclusion_line(&line, idx)?;
+                        exclusions.push(exclusion);
                     }
                 }
                 unknown => return Err(TsiError::UnexpectedKeyword(unknown.to_string())),
