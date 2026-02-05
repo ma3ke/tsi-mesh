@@ -276,7 +276,7 @@ inclusion 1
 0 1 2 0 1";
 
     #[test]
-    fn test_parse_valid_sample() {
+    fn parse_valid_sample() {
         let result = Tsi::parse(Cursor::new(VALID_TSI));
         assert!(result.is_ok(), "Should parse valid TSI data: {:?}", result.err());
         let tsi = result.unwrap();
@@ -286,7 +286,7 @@ inclusion 1
     }
 
     #[test]
-    fn test_normalization_safety() {
+    fn normalization_safety() {
         // Testing 0.0 0.0 vector to ensure no NaN propagation.
         let zero_vector_line = "0 1 2 0.0 0.0";
         let inclusion = items::parse_inclusion_line(zero_vector_line, 0).unwrap();
@@ -295,7 +295,7 @@ inclusion 1
     }
 
     #[test]
-    fn test_index_mismatch() {
+    fn index_mismatch() {
         let bad_index_line = "5 21.4 33.8 32.7 0"; // Expected 0, found 5.
         let result = items::parse_vertex_line(bad_index_line, 0);
         match result {
@@ -308,7 +308,7 @@ inclusion 1
     }
 
     #[test]
-    fn test_invalid_version() {
+    fn invalid_version() {
         let invalid_version = VALID_TSI.replace("version 1.1", "version 2.0");
         let result = Tsi::parse(Cursor::new(invalid_version));
         assert!(matches!(result, Err(TsiError::InvalidVersion(_))));
