@@ -1,6 +1,8 @@
 pub mod reader;
+pub mod writer;
 
 pub use reader::ReadTsi;
+pub use writer::WriteTsi;
 
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 pub struct Tsi {
