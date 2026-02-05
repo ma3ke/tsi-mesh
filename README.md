@@ -58,7 +58,11 @@ mesh.write(&mut writer)?;
 ## The `tsi` file format
 
 See the following excerpt from the [_TS2CG_] README.
-Note that the 'triangle type' is not parsed in this library (nor does _TS2CG_).
+Note that this description contains some _inconsistencies_, when comparing to
+the actual _TS2CG_ implementation. The version is not compared against anything
+in the _TS2CG_ implementation. This library accepts `1.1` and `1.2`, both of
+which are in active circulation, contrary to the description below. The
+'triangle type' is not parsed in this library (_TS2CG_ does not parse this).
 
 > The `*.tsi` files, are DTS simulation trajectory outputs. It contains
 > information about vertices, triangles and inclusion positions.<br> It can be
