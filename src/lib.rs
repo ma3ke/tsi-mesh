@@ -284,3 +284,60 @@ impl Tsi {
         Ok(Tsi { dimensions, vertices, triangles, inclusions, exclusions })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    const VALID_TSI: &str = "\
+version 1.1
+box 50.0 50.0 50.0
+vertex 3
+0 21.4 33.8 32.7 0
+1 38.1 26.1 32.3 0
+2 40.9 24.2 19.9 0
+triangle 1
+0 1 0 2 1
+inclusion 1
+0 1 2 0 1";
+
+    #[test]
+    fn test_parse_valid_sample() {
+        let result = Tsi::parse(Cursor::new(VALID_TSI));
+        assert!(result.is_ok(), "Should parse valid TSI data: {:?}", result.err());
+        let tsi = result.unwrap();
+        assert_eq!(tsi.dimensions, [50.0, 50.0, 50.0]);
+        assert_eq!(tsi.vertices.len(), 3);
+        assert_eq!(tsi.inclusions.len(), 1);
+    }
+
+    #[test]
+    fn test_normalization_safety() {
+        // Testing 0.0 0.0 vector to ensure no NaN propagation.
+        let zero_vector_line = "0 1 2 0.0 0.0";
+        let inclusion = items::parse_inclusion_line(zero_vector_line, 0).unwrap();
+        assert_eq!(inclusion.vector, [0.0, 0.0]);
+        assert!(!inclusion.vector[0].is_nan());
+    }
+
+    #[test]
+    fn test_index_mismatch() {
+        let bad_index_line = "5 21.4 33.8 32.7 0"; // Expected 0, found 5.
+        let result = items::parse_vertex_line(bad_index_line, 0);
+        match result {
+            Err(TsiError::IndexMismatch { found, expected, .. }) => {
+                assert_eq!(found, 5);
+                assert_eq!(expected, 0);
+            }
+            _ => panic!("Expected IndexMismatch error"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_version() {
+        let invalid_version = VALID_TSI.replace("version 1.1", "version 2.0");
+        let result = Tsi::parse(Cursor::new(invalid_version));
+        assert!(matches!(result, Err(TsiError::InvalidVersion(_))));
+    }
+}
