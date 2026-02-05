@@ -2,5 +2,5 @@
 name = "tsi"
 version = "0.1.0"
 edition = "2024"
-
-[dependencies]
+license = "MIT"
+authors = ["Marieke Westendorp <ma3ke.cyber@gmail.com>"]
