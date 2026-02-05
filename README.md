@@ -3,8 +3,8 @@
 This library provides reader and writer implementations for `tsi` files, which
 are used by [_FreeDTS_] and [_TS2CG_] to store and read mesh information.
 
-[_FreeDTS_]: https://github.com/weria-pezeshkian/TS2CG-v2.0
-[_TS2CG_]: https://github.com/weria-pezeshkian/FreeDTS
+[_FreeDTS_]: https://github.com/weria-pezeshkian/FreeDTS
+[_TS2CG_]: https://github.com/weria-pezeshkian/TS2CG-v2.0
 
 ## Features
 
